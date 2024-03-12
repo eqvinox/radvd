@@ -18,6 +18,8 @@
 #include "radvd.h"
 #include "netlink.h"
 
+extern int global_raw_sock;
+
 static int really_send(int sock, struct in6_addr const *dest, struct properties const *props, struct safe_buffer const *sb);
 static int send_ra(int sock, struct Interface *iface, struct in6_addr const *dest);
 static struct safe_buffer_list *build_ra_options(struct Interface const *iface, struct in6_addr const *dest);

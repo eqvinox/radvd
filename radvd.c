@@ -73,6 +73,8 @@ static char usage_str[] = {
 
 #endif
 
+int global_raw_sock = -1;
+
 static volatile int sighup_received = 0;
 static volatile int sigint_received = 0;
 static volatile int sigterm_received = 0;
@@ -341,6 +343,12 @@ int main(int argc, char *argv[])
 	int sock = open_icmpv6_socket();
 	if (sock < 0) {
 		perror("open_icmpv6_socket");
+		exit(1);
+	}
+
+	global_raw_sock = open_raw_socket();
+	if (sock < 0) {
+		perror("open_raw_socket");
 		exit(1);
 	}
 

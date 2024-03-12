@@ -356,6 +356,7 @@ void touch_iface(struct Interface *iface);
 
 /* socket.c */
 int open_icmpv6_socket(void);
+int open_raw_socket(void);
 
 /* send.c */
 int send_ra_forall(int sock, struct Interface *iface, struct in6_addr *dest);

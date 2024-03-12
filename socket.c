@@ -89,3 +89,17 @@ int open_icmpv6_socket(void)
 
 	return sock;
 }
+
+int open_raw_socket(void)
+{
+	int sock;
+
+	/* proto = 0 for RX-only */
+	sock = socket(AF_PACKET, SOCK_RAW, 0);
+	if (sock < 0) {
+		flog(LOG_ERR, "can't create socket(AF_PACKET): %s", strerror(errno));
+		return -1;
+	}
+
+	return sock;
+}
