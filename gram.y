@@ -66,6 +66,7 @@ int yylex_destroy (void);
 %token	<num>	SWITCH
 %token	<addr>	IPV6ADDR
 %token	<addr>	NOT_IPV6ADDR
+%token	<mac>	MACADDR
 %token 		INFINITY
 
 %token		T_IgnoreIfMissing
@@ -83,6 +84,7 @@ int yylex_destroy (void);
 %token		T_AdvDefaultLifetime
 %token		T_AdvDefaultPreference
 %token		T_AdvSourceLLAddress
+%token		T_SpoofSourceLL
 %token		T_RemoveAdvOnExit
 
 %token		T_AdvOnLink
@@ -152,6 +154,7 @@ int yylex_destroy (void);
 	double			dec;
 	struct in6_addr		*addr;
 	char			*str;
+	struct ether_addr	mac;
 	struct AdvPrefix	*pinfo;
 	struct AdvRoute		*rinfo;
 	struct AdvRDNSS		*rdnssinfo;
@@ -328,6 +331,11 @@ ifaceval	: T_MinRtrAdvInterval NUMBER ';'
 		| T_AdvSourceLLAddress SWITCH ';'
 		{
 			iface->AdvSourceLLAddress = $2;
+		}
+		| T_SpoofSourceLL MACADDR ';'
+		{
+			iface->spoof_ll_source = $2;
+			iface->do_spoof_ll_source = 1;
 		}
 		| T_AdvIntervalOpt SWITCH ';'
 		{

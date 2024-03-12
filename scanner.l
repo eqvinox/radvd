@@ -35,6 +35,7 @@ addr2		{hexdigit}{1,4}(":"{hexdigit}{1,4})*"::"
 addr3		({hexdigit}{1,4}":"){7}{hexdigit}{1,4}
 addr		({addr1}|{addr2}|{addr3}|"::")
 naddr		("!"{addr})
+macaddr		({hexdigit}{2}":"){5}{hexdigit}{2}
 whitespace	([ \t])+
 string		[a-zA-Z0-9`~!@#$%\^&*()_\-+=:\[\]<>,\.?\\]+|L?\"(\\.|[^\\"])*\"
 %%
@@ -70,6 +71,7 @@ AdvCurHopLimit		{ return T_AdvCurHopLimit; }
 AdvDefaultLifetime	{ return T_AdvDefaultLifetime; }
 AdvDefaultPreference	{ return T_AdvDefaultPreference; }
 AdvSourceLLAddress	{ return T_AdvSourceLLAddress; }
+SpoofSourceLL		{ return T_SpoofSourceLL; }
 RemoveAdvOnExit		{ return T_RemoveAdvOnExit; }
 
 AdvOnLink		{ return T_AdvOnLink; }
@@ -138,6 +140,14 @@ Adv6LBRaddress		{ return T_Adv6LBRaddress; }
 
 			yylval.addr = &addr;
 			return NOT_IPV6ADDR;
+		}
+
+{macaddr}	{
+#define arg(x) &yylval.mac.ether_addr_octet[x]
+			sscanf(yytext, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+			       arg(0), arg(1), arg(2), arg(3), arg(4), arg(5));
+#undef arg
+			return MACADDR;
 		}
 
 {number}	{

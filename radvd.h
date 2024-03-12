@@ -120,6 +120,9 @@ struct Interface {
 		int if_maxmtu;
 	} sllao;
 
+	int do_spoof_ll_source;
+	struct ether_addr spoof_ll_source;
+
 	struct mipv6 {
 		/* Mobile IPv6 extensions */
 		int AdvIntervalOpt;
