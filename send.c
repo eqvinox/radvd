@@ -35,7 +35,7 @@ static void limit_prefix_lifetimes(struct AdvPrefix *prefix);
 static void add_ra_header(struct safe_buffer *sb, struct ra_header_info const *ra_header_info, int cease_adv);
 static void add_ra_option_prefix(struct safe_buffer *sb, struct AdvPrefix const *prefix, int cease_adv);
 static void add_ra_option_mtu(struct safe_buffer *sb, uint32_t AdvLinkMTU);
-static void add_ra_option_sllao(struct safe_buffer *sb, struct sllao const *sllao);
+static void add_ra_option_sllao(struct safe_buffer *sb, struct sllao const *sllao, const struct ether_addr *spoof);
 static void add_ra_option_mipv6_rtr_adv_interval(struct safe_buffer *sb, double MaxRtrAdvInterval);
 static void add_ra_option_mipv6_home_agent_info(struct safe_buffer *sb, struct mipv6 const *mipv6);
 static void add_ra_option_lowpanco(struct safe_buffer *sb, struct AdvLowpanCo const *lowpanco);
@@ -680,17 +680,24 @@ static struct safe_buffer_list *add_ra_options_dnssl(struct safe_buffer_list *sb
 /*
  * add Source Link-layer Address option
  */
-static void add_ra_option_sllao(struct safe_buffer *sb, struct sllao const *sllao)
+static void add_ra_option_sllao(struct safe_buffer *sb, struct sllao const *sllao,
+				const struct ether_addr *spoof)
 {
 	/* +2 for the ND_OPT_SOURCE_LINKADDR and the length (each occupy one byte) */
 	size_t const sllao_bytes = (sllao->if_hwaddr_len / 8) + 2;
 	size_t const sllao_len = (sllao_bytes + 7) / 8;
+	const uint8_t *addr;
 
 	uint8_t buff[2] = {ND_OPT_SOURCE_LINKADDR, (uint8_t)sllao_len};
 	safe_buffer_append(sb, buff, sizeof(buff));
 
+	if (sllao->if_hwaddr_len / 8 != ETH_ALEN)
+		spoof = NULL;
+	addr = spoof ? (const uint8_t *)&spoof->ether_addr_octet :
+		(const uint8_t *)sllao->if_hwaddr;
+
 	/* if_hwaddr_len is in bits, so divide by 8 to get the byte count. */
-	safe_buffer_append(sb, sllao->if_hwaddr, sllao->if_hwaddr_len / 8);
+	safe_buffer_append(sb, addr, sllao->if_hwaddr_len / 8);
 	safe_buffer_pad(sb, sllao_len * 8 - sllao_bytes);
 }
 
@@ -835,10 +842,13 @@ static struct safe_buffer_list *build_ra_options(struct Interface const *iface, 
 		add_ra_option_mtu(cur->sb, iface->AdvLinkMTU);
 	}
 
-	if (iface->AdvSourceLLAddress && iface->sllao.if_hwaddr_len > 0 && schedule_option_sllao(dest, iface)) {
+	if (iface->AdvSourceLLAddress &&
+	    (iface->sllao.if_hwaddr_len > 0 || iface->do_spoof_ll_source) &&
+	    schedule_option_sllao(dest, iface)) {
 		cur->next = new_safe_buffer_list();
 		cur = cur->next;
-		add_ra_option_sllao(cur->sb, &iface->sllao);
+		add_ra_option_sllao(cur->sb, &iface->sllao,
+				    iface->do_spoof_ll_source ? &iface->spoof_ll_source : NULL);
 	}
 
 	if (iface->mipv6.AdvIntervalOpt && schedule_option_mipv6_rtr_adv_interval(dest, iface)) {
