@@ -334,8 +334,8 @@ ifaceval	: T_MinRtrAdvInterval NUMBER ';'
 		}
 		| T_SpoofSourceLL MACADDR ';'
 		{
-			iface->spoof_ll_source = $2;
-			iface->do_spoof_ll_source = 1;
+			iface->props.spoof_ll_source = $2;
+			iface->props.do_spoof_ll_source = 1;
 		}
 		| T_AdvIntervalOpt SWITCH ';'
 		{

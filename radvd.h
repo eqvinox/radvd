@@ -82,6 +82,8 @@ struct Interface {
 		int addrs_count;
 		struct in6_addr *if_addr_rasrc; /* selected AdvRASrcAddress or NULL */
 		uint32_t max_ra_option_size;
+		int do_spoof_ll_source;
+		struct ether_addr spoof_ll_source;
 	} props;
 
 	struct ra_header_info {
@@ -119,9 +121,6 @@ struct Interface {
 		int if_prefix_len;
 		int if_maxmtu;
 	} sllao;
-
-	int do_spoof_ll_source;
-	struct ether_addr spoof_ll_source;
 
 	struct mipv6 {
 		/* Mobile IPv6 extensions */

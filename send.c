@@ -845,12 +845,12 @@ static struct safe_buffer_list *build_ra_options(struct Interface const *iface, 
 	}
 
 	if (iface->AdvSourceLLAddress &&
-	    (iface->sllao.if_hwaddr_len > 0 || iface->do_spoof_ll_source) &&
+	    (iface->sllao.if_hwaddr_len > 0 || iface->props.do_spoof_ll_source) &&
 	    schedule_option_sllao(dest, iface)) {
 		cur->next = new_safe_buffer_list();
 		cur = cur->next;
 		add_ra_option_sllao(cur->sb, &iface->sllao,
-				    iface->do_spoof_ll_source ? &iface->spoof_ll_source : NULL);
+				    iface->props.do_spoof_ll_source ? &iface->props.spoof_ll_source : NULL);
 	}
 
 	if (iface->mipv6.AdvIntervalOpt && schedule_option_mipv6_rtr_adv_interval(dest, iface)) {
