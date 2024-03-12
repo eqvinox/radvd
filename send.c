@@ -21,6 +21,7 @@
 extern int global_raw_sock;
 
 static int really_send(int sock, struct in6_addr const *dest, struct properties const *props, struct safe_buffer const *sb);
+static int really_send_raw(struct in6_addr const *dest, struct properties const *props, struct safe_buffer const *sb);
 static int send_ra(int sock, struct Interface *iface, struct in6_addr const *dest);
 static struct safe_buffer_list *build_ra_options(struct Interface const *iface, struct in6_addr const *dest);
 
@@ -889,15 +890,18 @@ static struct safe_buffer_list *build_ra_options(struct Interface const *iface, 
 	return sbl;
 }
 
+static uint8_t const all_hosts_addr[] = {0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+
 static int send_ra(int sock, struct Interface *iface, struct in6_addr const *dest)
 {
+	int unicast = dest != NULL;
+
 	if (!iface->AdvSendAdvert) {
 		dlog(LOG_DEBUG, 2, "AdvSendAdvert is off for %s", iface->props.name);
 		return 0;
 	}
 
 	if (dest == NULL) {
-		static uint8_t const all_hosts_addr[] = {0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
 		dest = (struct in6_addr const *)all_hosts_addr;
 		clock_gettime(CLOCK_MONOTONIC, &iface->times.last_multicast);
 	}
@@ -974,7 +978,12 @@ static int send_ra(int sock, struct Interface *iface, struct in6_addr const *des
 		// RA built, now send it.
 		dlog(LOG_DEBUG, 5, "sending RA to %s on %s (%s), %lu options (using %zd/%u bytes)", dest_text, iface->props.name,
 		     src_text, option_count, sb->used, iface->props.max_ra_option_size);
-		int err = really_send(sock, dest, &iface->props, sb);
+		int err;
+
+		if (iface->props.do_spoof_ll_source && !unicast)
+			err = really_send_raw(dest, &iface->props, sb);
+		else
+			err = really_send(sock, dest, &iface->props, sb);
 		if (err < 0) {
 			if (!iface->IgnoreIfMissing || !(errno == EINVAL || errno == ENODEV))
 				flog(LOG_WARNING, "sendmsg: %s", strerror(errno));
@@ -1034,6 +1043,172 @@ static int really_send(int sock, struct in6_addr const *dest, struct properties 
 	mhdr.msg_controllen = sizeof(chdr);
 
 	return sendmsg(sock, &mhdr, 0);
+}
+
+/* code yanked from FRR */
+
+#include <stdbool.h>
+
+#define array_size(ar) (sizeof(ar) / sizeof(ar[0]))
+
+/* IPv6 pseudoheader */
+struct ipv6_ph {
+	struct in6_addr src;
+	struct in6_addr dst;
+	uint32_t ulpl;
+	uint8_t zero[3];
+	uint8_t next_hdr;
+} __attribute__((packed));
+
+#define add_carry(dst, add)                                                    \
+	do {                                                                   \
+		typeof(dst) _add = (add);                                      \
+		dst += _add;                                                   \
+		if (dst < _add)                                                \
+			dst++;                                                 \
+	} while (0)
+
+static uint16_t in_cksumv(const struct iovec *iov, size_t iov_len)
+{
+	const struct iovec *iov_end;
+	uint32_t sum = 0;
+
+	union {
+		uint8_t bytes[2];
+		uint16_t word;
+	} wordbuf;
+	bool have_oddbyte = false;
+
+	/*
+	 * Our algorithm is simple, using a 32-bit accumulator (sum),
+	 * we add sequential 16-bit words to it, and at the end, fold back
+	 * all the carry bits from the top 16 bits into the lower 16 bits.
+	 */
+
+	for (iov_end = iov + iov_len; iov < iov_end; iov++) {
+		const uint8_t *ptr, *end;
+
+		ptr = (const uint8_t *)iov->iov_base;
+		end = ptr + iov->iov_len;
+		if (ptr == end)
+			continue;
+
+		if (have_oddbyte) {
+			have_oddbyte = false;
+			wordbuf.bytes[1] = *ptr++;
+
+			add_carry(sum, wordbuf.word);
+		}
+
+		while (ptr + 8 <= end) {
+			add_carry(sum, *(const uint32_t *)(ptr + 0));
+			add_carry(sum, *(const uint32_t *)(ptr + 4));
+			ptr += 8;
+		}
+
+		while (ptr + 2 <= end) {
+			add_carry(sum, *(const uint16_t *)ptr);
+			ptr += 2;
+		}
+
+		if (ptr + 1 <= end) {
+			wordbuf.bytes[0] = *ptr++;
+			have_oddbyte = true;
+		}
+	}
+
+	/* mop up an odd byte, if necessary */
+	if (have_oddbyte) {
+		wordbuf.bytes[1] = 0;
+		add_carry(sum, wordbuf.word);
+	}
+
+	/*
+	 * Add back carry outs from top 16 bits to low 16 bits.
+	 */
+
+	sum = (sum >> 16) + (sum & 0xffff); /* add high-16 to low-16 */
+	sum += (sum >> 16);		    /* add carry */
+	return ~sum;
+}
+
+#pragma GCC diagnostic ignored "-Wcast-qual"
+
+static inline uint16_t in_cksum_with_ph6(const struct ipv6_ph *ph,
+					 const void *data, size_t nbytes)
+{
+	struct iovec iov[2];
+
+	iov[0].iov_base = (void *)ph;
+	iov[0].iov_len = sizeof(*ph);
+	iov[1].iov_base = (void *)data;
+	iov[1].iov_len = nbytes;
+	return in_cksumv(iov, array_size(iov));
+}
+
+struct rawhdr {
+	struct ether_header ethhdr;
+	struct ip6_hdr ip6hdr;
+} __attribute__((packed));
+
+static int really_send_raw(struct in6_addr const *dest, struct properties const *props, struct safe_buffer const *sb)
+{
+	struct rawhdr rawhdr = {
+		.ethhdr = {
+			.ether_dhost = {0x33, 0x33, 0, 0, 0, 1},
+			.ether_type = htons(ETH_P_IPV6),
+		},
+		.ip6hdr = {
+			.ip6_plen = htons(sb->used),
+			.ip6_nxt = IPPROTO_ICMPV6,
+			.ip6_hlim = 255,
+		},
+	};
+
+	rawhdr.ip6hdr.ip6_vfc = 0x60;	/* union member, can't initialize above */
+
+	memcpy(&rawhdr.ethhdr.ether_shost, props->spoof_ll_source.ether_addr_octet, ETH_ALEN);
+	memcpy(&rawhdr.ip6hdr.ip6_src, props->if_addr_rasrc, sizeof(struct in6_addr));
+	memcpy(&rawhdr.ip6hdr.ip6_dst, all_hosts_addr, sizeof(struct in6_addr));
+
+	struct ipv6_ph ph = {
+		.ulpl = htonl(sb->used),
+		.next_hdr = 58,
+	};
+
+	memcpy(&ph.src, props->if_addr_rasrc, sizeof(struct in6_addr));
+	memcpy(&ph.dst, all_hosts_addr, sizeof(struct in6_addr));
+
+	struct icmp6_hdr *icmp6hdr = (struct icmp6_hdr *)sb->buffer;
+
+	icmp6hdr->icmp6_cksum = in_cksum_with_ph6(&ph, sb->buffer, sb->used);
+
+	struct iovec iov[2];
+	iov[0].iov_len = sizeof(rawhdr);
+	iov[0].iov_base = (caddr_t)&rawhdr;
+	iov[1].iov_len = sb->used;
+	iov[1].iov_base = (caddr_t)sb->buffer;
+
+	struct sockaddr_ll sll = {
+		.sll_family = AF_PACKET,
+		.sll_protocol = htons(ETH_P_IPV6),
+		.sll_ifindex = props->if_index,
+		.sll_hatype = ARPHRD_ETHER,
+		.sll_halen = ETH_ALEN,
+	};
+
+	memcpy(&sll.sll_addr, &props->spoof_ll_source.ether_addr_octet, ETH_ALEN);
+
+	struct msghdr mhdr;
+	memset(&mhdr, 0, sizeof(mhdr));
+	mhdr.msg_name = (caddr_t)&sll;
+	mhdr.msg_namelen = sizeof(struct sockaddr_ll);
+	mhdr.msg_iov = iov;
+	mhdr.msg_iovlen = 2;
+	mhdr.msg_control = NULL;
+	mhdr.msg_controllen = 0;
+
+	return sendmsg(global_raw_sock, &mhdr, 0);
 }
 
 static int schedule_option_prefix(struct in6_addr const *dest, struct Interface const *iface, struct AdvPrefix const *prefix)
